@@ -41,15 +41,25 @@ from constants import HOME_ADVANTAGE, WORLD_CUP_HOME_ADVANTAGE, BETA, ENSEMBLE_W
 from data_collection import run_collection
 from model_poisson import predict_match, predict_match_live
 from player_impact import analyze_player_impact
-from worldcup_schedule import get_live_matches, get_upcoming_matches, get_match_status, get_countdown
+from worldcup_schedule import get_live_matches, get_upcoming_matches, get_match_status, get_countdown, _parse_goal_events
 from player_context import calculate_context_adjustment, get_context_notes
 from odds_fetcher import get_market_odds, ensemble_probability
 from match_history import get_team_form
 from news_feed import get_team_news
+from territorial_dominance import (
+    LiveMatchSignal, DominanceBayesianUpdater, LambdaDominanceAdjuster,
+    compute_dominance, DominanceOutput,
+)
 
 # ── Caché de predicciones ───────────────────────────────────────────────
 if "predictions_cache" not in st.session_state:
     st.session_state.predictions_cache = {}
+
+# ── Caché de estados de dominio (persiste entre auto-refreshes) ─────────
+if "dominance_updaters" not in st.session_state:
+    st.session_state.dominance_updaters = {}
+if "dominance_states" not in st.session_state:
+    st.session_state.dominance_states = {}
 
 
 def _render_analysis_expander(match: dict, result: dict) -> None:
@@ -169,6 +179,8 @@ def predict_single_match(match: dict) -> dict:
         ctx_home = calculate_context_adjustment(match["home"], match)
         ctx_away = calculate_context_adjustment(match["away"], match)
 
+        dom_output = None
+
         is_live = match.get("status") == "live"
         current_minute = match.get("minute", 0)
         current_score_h = match.get("score_home") or 0
@@ -185,6 +197,41 @@ def predict_single_match(match: dict) -> dict:
                                      player_adjustment=impact["alpha_home"] * ctx_home)
             lam_a = calculate_lambda(att_a, def_h, g_neutral, is_home=False,
                                      player_adjustment=impact["alpha_away"] * ctx_away)
+
+            # ── Factor de Dominio Posicional (v3.0) ──────────────────
+            dom_output = None
+            try:
+                # Parsear eventos de gol desde la API
+                home_scorers = match.get("_raw_home_scorers", "null")
+                away_scorers = match.get("_raw_away_scorers", "null")
+                goal_events = _parse_goal_events(home_scorers, away_scorers)
+
+                raw_signal = LiveMatchSignal(
+                    minute=current_minute,
+                    score_home=current_score_h,
+                    score_away=current_score_a,
+                    goal_events=goal_events,
+                )
+
+                # Obtener o crear el updater Bayesiano para este partido
+                mid = str(match_id)
+                if mid not in st.session_state.dominance_updaters:
+                    st.session_state.dominance_updaters[mid] = DominanceBayesianUpdater()
+
+                dom_state, dom_output = compute_dominance(
+                    raw_signal=raw_signal,
+                    home_strength=att_h,
+                    away_strength=att_a,
+                    updater=st.session_state.dominance_updaters[mid],
+                )
+                st.session_state.dominance_states[mid] = dom_output
+
+                # Ajustar λ con el factor de dominio
+                adjuster = LambdaDominanceAdjuster()
+                lam_h, lam_a = adjuster.adjust(lam_h, lam_a, dom_state)
+            except Exception:
+                dom_output = None  # si falla, continuar sin dominio
+
             pred = predict_match_live(
                 home_team=match["home"], away_team=match["away"],
                 current_minute=current_minute,
@@ -225,6 +272,7 @@ def predict_single_match(match: dict) -> dict:
             "notes_home": notes_home, "notes_away": notes_away,
             "market": market,
             "ens_home": ens_home, "ens_draw": ens_draw, "ens_away": ens_away,
+            "dominance": dom_output,
         }
         st.session_state.predictions_cache[cache_key] = result
         return result

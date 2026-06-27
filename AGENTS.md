@@ -53,6 +53,8 @@ FutFox/
 │                                  con resultados reales del torneo)
 ├── model_poisson.py            ← Modelo Poisson compuesto + Dixon & Coles ρ + shrinkage
 │                                  Bayesiano + predict_match_live() + sanity checks
+├── territorial_dominance.py     ← Factor de Dominio Posicional (v3.0): infiere ventaja
+│                                  territorial desde métricas de flujo de juego sin (X,Y)
 ├── player_impact.py            ← Análisis xGI/90 + ajuste α por jugadores clave
 ├── player_context.py           ← Factores contextuales φ (altitud, viaje, moral, clima)
 ├── live_api.py                 ← Cliente HTTP para API worldcup26.ir con caché
@@ -83,26 +85,33 @@ FutFox/
 worldcup26.ir API (HTTP, caché 60s)
     │
     ▼
-live_api.py → worldcup_schedule.py (mapeo de partidos, countdowns, timezone CST)
-    │
+live_api.py → worldcup_schedule.py (mapeo de partidos, countdowns, timezone CST,
+    │                                  parseo de scorers para dominio posicional)
     ▼
-data_collection.py (fallback WC + retroalimentación con resultados reales finished)
-    │
+data_collection.py (fallback WC + retroalimentación con resultados reales finished
+    │               + weighting temporal con decaimiento exponencial)
     ▼
 player_impact.py (xGI/90 → top 3 jugadores → α ajuste por equipo)
     │
     ▼
-player_context.py (φ: altitud, viaje, moral, lesiones, clima)
+player_context.py (φ: altitud, viaje, moral, lesiones, clima — calibrado)
     │
     ▼
 model_poisson.py (Poisson compuesto + Dixon & Coles ρ + shrinkage Bayesiano
-    + predict_match_live() para partidos en curso)
+    │               + predict_match_live() para partidos en curso)
+    │
+    ├── territorial_dominance.py  ← SOLO para partidos live (minuto > 0)
+    │       │                        SignalNormalizer → DominanceBayesianUpdater
+    │       │                        → LambdaDominanceAdjuster → λ ajustados por δ
+    │       ▼
+    └── predict_match_live(λ_ajustados)
     │
     ▼
 odds_fetcher.py (The Odds API o sintético → ensemble 40% modelo / 60% mercado)
     │
     ▼
-app.py (Streamlit: partidos en vivo, próximos, comenzando, análisis unificado)
+app.py (Streamlit: partidos en vivo, próximos, comenzando, análisis unificado,
+           factor de dominio posicional en vivo)
 ```
 
 ### Flujo de Datos — Modo Liga (CLI)
@@ -183,6 +192,11 @@ main.py (orquestador → tablas formateadas en consola)
 | `G_NEUTRAL_STRENGTH_WEIGHT` | 0.4 | Ajuste de G_neutral por fuerza relativa |
 | `GOAL_TIME_DECAY` | 0.25 | Aumento de goles al final del partido |
 | `ENSEMBLE_WEIGHT` | 0.4 | Peso del modelo vs mercado (40/60) |
+| `TAU_BASE` | 0.50 | Sensibilidad base del ajuste de λ por dominio (τ) |
+| `TAU_RATIO` | 1.30 | Asimetría dominado/dominador (τ_sub / τ_dom) |
+| `PRIOR_STRENGTH_DEFAULT` | 2.0 | Fuerza de la prior Bayesiana para δ |
+| `DOMINANCE_UPDATE_INTERVAL` | 30 | Segundos entre actualizaciones de dominio |
+| `AUTO_REFRESH_SECONDS` | 60 | Intervalo de auto-refresh en UI |
 | `AUTO_REFRESH_SECONDS` | 60 | Intervalo de auto-refresh en UI |
 | `MAX_RETRIES` | 3 | Reintentos de conexión a Understat |
 | `RETRY_DELAY` | 2 | Segundos entre reintentos |
@@ -210,6 +224,19 @@ main.py (orquestador → tablas formateadas en consola)
 - `_sanity_check_prediction()` se llama automáticamente en cada predicción
 - λ se clampan a [MIN_LAMBDA, MAX_LAMBDA] con warning
 - La matriz de probabilidad P(i,j) usa `scipy.stats.poisson.pmf()`
+
+### `territorial_dominance.py` (v3.0)
+- **Factor de Dominio Posicional:** infiere ventaja territorial sin coordenadas (X,Y)
+- `SignalNormalizer`: transforma señales crudas → TerritorialSignal en [-1, 1]
+- `DominanceBayesianUpdater`: actualiza δ (variable latente) secuencialmente vía Bayes
+  - δ ~ Beta mapeada a [-1, 1]: α = evidencia local, β = evidencia visitante
+  - `P(δ|datos) ∝ P(δ) × Π P(señal_i|δ)`
+- `LambdaDominanceAdjuster`: λ_adj = λ_base × exp(±δ × τ)
+  - τ escala con sqrt(confidence) → conservador al inicio, agresivo con certidumbre
+  - τ_sub / τ_dom = 1.30 (asimetría dominado/dominador)
+- Señales disponibles: goal_timing, score_momentum, shot_dominance, pass_territoriality, corner_pressure
+- `compute_dominance()`: función de conveniencia que ejecuta el pipeline completo
+- SOLO se activa para partidos live (minuto > 0); upcoming usan predict_match normal
 
 ### `player_impact.py`
 - xGI/90 = (xG + xA) / (minutes / 90)
