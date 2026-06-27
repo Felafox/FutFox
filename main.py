@@ -187,8 +187,8 @@ def print_model_parameters(
     print(f"""
   Ecuación del modelo Poisson compuesto:
 
-    λ_local    = Ataque_local × Defensa_visitante × Ḡ_local × γ × α_local
-    λ_visitante = Ataque_visitante × Defensa_local × Ḡ_visitante × α_visitante
+    λ_local    = Ataque_local × Defensa_visitante × G_neutral × γ × α_local
+    λ_visitante = Ataque_visitante × Defensa_local × G_neutral × α_visitante
 
   Donde:
     - Ataque = GF_per_game / avg(GF_liga)

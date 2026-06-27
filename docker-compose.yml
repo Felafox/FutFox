@@ -1,0 +1,73 @@
+# ═══════════════════════════════════════════════════════════════════════════
+# FutFox — Docker Compose
+# ═══════════════════════════════════════════════════════════════════════════
+#
+# Servicios:
+#   futfox-web         → Streamlit en http://localhost:8501
+#   futfox-cli         → Perfil para CLI con argumentos personalizados
+#   futfox-cli-default → Predicción con valores por defecto (Arsenal vs Chelsea)
+#
+# Comandos rápidos:
+#   docker compose up -d                   # Iniciar app web
+#   docker compose build                   # Reconstruir imagen tras cambios
+#   docker compose run futfox-cli python main.py EPL 2024 "Manchester City" Liverpool
+#   docker compose down                    # Detener y limpiar
+#
+# ═══════════════════════════════════════════════════════════════════════════
+
+version: "3.9"
+
+services:
+
+  # ── App Web (Streamlit) ──────────────────────────────────────────────────
+  futfox-web:
+    build: .
+    image: futfox:latest
+    container_name: futfox-web
+    ports:
+      - "8501:8501"
+    environment:
+      - FUTFOX_PORT=8501
+      - PYTHONUNBUFFERED=1
+      - TZ=America/Mexico_City
+    # Montar código fuente para desarrollo (cambios en vivo sin rebuild)
+    volumes:
+      - ./:/app
+      # Excluir __pycache__ del montaje para no ensuciar el host
+      - /app/__pycache__/
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8501/_stcore/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+
+  # ── CLI: Predicción bajo demanda (sin puerto, se ejecuta con `run`) ────
+  futfox-cli:
+    build: .
+    image: futfox:latest
+    container_name: futfox-cli
+    # Sin puerto — solo ejecución puntual
+    # Uso: docker compose run futfox-cli python main.py <liga> <temp> <local> <visitante>
+    profiles:
+      - cli
+    environment:
+      - PYTHONUNBUFFERED=1
+      - TZ=America/Mexico_City
+    stdin_open: true
+    tty: false
+
+  # ── CLI: Predicción rápida con defaults ─────────────────────────────────
+  futfox-cli-default:
+    build: .
+    image: futfox:latest
+    container_name: futfox-cli-default
+    profiles:
+      - cli
+    command: python main.py
+    environment:
+      - PYTHONUNBUFFERED=1
+      - TZ=America/Mexico_City
+    stdin_open: true
+    tty: false

@@ -26,3 +26,7 @@ predictions.jsonl
 # Docker
 *.env
 .env.local
+.env.*
+.envrc
+.env.production
+*.secret

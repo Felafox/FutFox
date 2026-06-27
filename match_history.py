@@ -56,21 +56,38 @@ RESULTS = [
 def get_team_form(team: str) -> dict:
     """
     Retorna el historial de partidos completados de una selección.
-
-    Returns:
-        dict con:
-          - matches: lista de dicts {opponent, result, gf, ga, status}
-          - record: "W-D-L"
-          - gf: goles a favor totales
-          - ga: goles en contra totales
-          - streak: racha actual (ej: "W-W")
+    Intenta obtenerlos de la API real, si no, usa el fallback local.
     """
+    import live_api
+    api_games = live_api.fetch_games()
+    
+    matches_list = []
+    
+    if api_games is not None:
+        for g in api_games:
+            finished_val = str(g.get("finished", "FALSE")).upper().strip()
+            time_elapsed = str(g.get("time_elapsed", "")).strip().lower()
+            if finished_val == "TRUE" or time_elapsed == "finished":
+                home = g.get("home_team_name_en", "")
+                away = g.get("away_team_name_en", "")
+                
+                try:
+                    gf = int(g.get("home_score", 0))
+                    ga = int(g.get("away_score", 0))
+                except (ValueError, TypeError):
+                    continue
+                    
+                group = g.get("group", "")
+                matches_list.append((home, away, gf, ga, group))
+    else:
+        matches_list = RESULTS
+
     matches = []
     gf_total = 0
     ga_total = 0
     results_sequence = []
 
-    for home, away, gf, ga, group in RESULTS:
+    for home, away, gf, ga, group in matches_list:
         if home == team:
             result = "W" if gf > ga else ("D" if gf == ga else "L")
             matches.append({

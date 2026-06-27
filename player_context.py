@@ -16,6 +16,29 @@ Autor: FutFox Prediction Engine
 
 import math
 
+# ── Mapa inverso para buscar contexto con nombres en inglés ──────────────
+# Permite que calculate_context_adjustment() acepte nombres de la API
+from constants import TEAM_NAME_MAP
+_REVERSE_CONTEXT_MAP = {v: k for k, v in TEAM_NAME_MAP.items()}
+
+
+def _get_context(team: str) -> dict:
+    """Busca el contexto de un equipo, soportando nombres en inglés y español."""
+    ctx = TEAM_CONTEXT.get(team, {})
+    if ctx:
+        return ctx
+    # Intentar con nombre en inglés (si viene en español del API)
+    english_name = _REVERSE_CONTEXT_MAP.get(team, "")
+    if english_name:
+        ctx = TEAM_CONTEXT.get(english_name, {})
+        if ctx:
+            return ctx
+    # Intentar con nombre en español (si viene en inglés del API)
+    spanish_name = TEAM_NAME_MAP.get(team, "")
+    if spanish_name:
+        return TEAM_CONTEXT.get(spanish_name, {})
+    return {}
+
 # ── Datos base de cada selección ───────────────────────────────────────
 # altitud_origen_m: altitud promedio del país (capital o ciudad principal)
 # travel_km: distancia aproximada al torneo (promedio entre sedes)
@@ -228,7 +251,7 @@ def calculate_altitude_penalty(team: str, stadium_altitude_m: float) -> float:
     Returns:
         float entre -0.04 y +0.02 (ajuste a α)
     """
-    ctx = TEAM_CONTEXT.get(team, {})
+    ctx = _get_context(team)
     team_alt = ctx.get("altitud_origen_m", 500)
     diff = stadium_altitude_m - team_alt
 
@@ -260,7 +283,7 @@ def calculate_context_adjustment(team: str, match_info: dict) -> float:
     Returns:
         float φ en rango [0.92, 1.08]
     """
-    ctx = TEAM_CONTEXT.get(team, {})
+    ctx = _get_context(team)
     if not ctx:
         return 1.0
 
@@ -304,7 +327,7 @@ def get_context_notes(team: str, match_info: dict) -> list:
     Returns:
         Lista de strings con emojis descriptivos.
     """
-    ctx = TEAM_CONTEXT.get(team, {})
+    ctx = _get_context(team)
     notes = []
 
     # Altitud

@@ -1,0 +1,28 @@
+# ─────────────────────────────────────────────────────
+# Streamlit configuration for Docker / Production
+# ─────────────────────────────────────────────────────
+
+[server]
+# Bind to all interfaces inside the container
+address = "0.0.0.0"
+port = 8501
+headless = true
+
+# Disable CORS & XSRF — required for containerized access
+enableCORS = false
+enableXsrfProtection = false
+
+# Don't open browser automatically (inside container)
+runOnSave = false
+
+[browser]
+# Disable auto-launch of browser
+gatherUsageStats = false
+serverAddress = "0.0.0.0"
+
+[logger]
+level = "info"
+
+[client]
+showErrorDetails = false
+toolbarMode = "minimal"

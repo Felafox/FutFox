@@ -31,6 +31,7 @@ from constants import (
     HOME_GOAL_SHARE,
     MAX_RETRIES,
     RETRY_DELAY,
+    TEAM_NAME_MAP,
 )
 
 # ---------------------------------------------------------------------------
@@ -378,13 +379,30 @@ async def collect_data(
     )
 
     # Construir DataFrames de jugadores desde el fallback
+    # Mapa inverso: español → inglés (para buscar equipos que vienen de la API)
+    _REVERSE_NAME_MAP = {v: k for k, v in TEAM_NAME_MAP.items()}
+    
     def _get_players(team_name: str) -> pd.DataFrame:
-        """Obtiene jugadores del fallback o crea un genérico."""
+        """Obtiene jugadores del fallback o crea un genérico.
+        Soporta nombres en inglés (API) y español (fallback)."""
+        # 1. Intentar con el nombre exacto
         if team_name in player_fallback:
             records = [{**p, "team": team_name} for p in player_fallback[team_name]]
             return pd.DataFrame(records)
+        
+        # 2. Intentar con el nombre en inglés (API → español)
+        english_name = _REVERSE_NAME_MAP.get(team_name, team_name)
+        if english_name in player_fallback:
+            records = [{**p, "team": team_name} for p in player_fallback[english_name]]
+            return pd.DataFrame(records)
+        
+        # 3. Intentar con el nombre en español (por si viene en español del fixture)
+        spanish_name = TEAM_NAME_MAP.get(team_name, team_name)
+        if spanish_name in player_fallback:
+            records = [{**p, "team": team_name} for p in player_fallback[spanish_name]]
+            return pd.DataFrame(records)
 
-        # Fallback genérico: crear un jugador promedio para el equipo
+        # 4. Fallback genérico: crear un jugador promedio para el equipo
         # usando los valores promedio de la liga
         print(f"  [INFO] '{team_name}' no tiene datos de jugadores específicos. Usando perfil genérico.")
         avg_xg = league_stats["xG"].median() / league_stats["gp"].median() * 0.25
@@ -404,7 +422,19 @@ async def collect_data(
 
     # Agregar equipos faltantes al DataFrame de liga con valores promedio
     for team_name in [home_team, away_team]:
-        if team_name not in league_stats["team"].values:
+        # Intentar múltiples variantes del nombre
+        team_found = team_name in league_stats["team"].values
+        if not team_found:
+            # Intentar con nombre en inglés (API)
+            english_name = _REVERSE_NAME_MAP.get(team_name, "")
+            if english_name and english_name in league_stats["team"].values:
+                team_found = True
+            # Intentar con nombre en español
+            spanish_name = TEAM_NAME_MAP.get(team_name, "")
+            if not team_found and spanish_name and spanish_name in league_stats["team"].values:
+                team_found = True
+        
+        if not team_found:
             avg_gp = int(league_stats["gp"].median())
             avg_gf = league_stats["gf"].median()
             avg_ga = league_stats["ga"].median()
@@ -508,7 +538,7 @@ def run_collection(
 if __name__ == "__main__":
     print("Test de data_collection.py\n")
     try:
-        ls, hp, ap, la = run_collection(
+        ls, hp, ap, la, _ = run_collection(
             league="EPL",
             season=2024,
             home_team="Arsenal",

@@ -219,14 +219,25 @@ def get_market_odds(
     if cached:
         return cached
 
-    # 2. Intentar The Odds API
+    # 2. Intentar odds de casa mexicana (hardcoded, offline)
+    try:
+        from odds_mexico import get_mexico_odds
+        mex_data = get_mexico_odds(home_team, away_team)
+        if mex_data:
+            mex_data["source"] = "mexico"
+            _set_cache(key, mex_data)
+            return mex_data
+    except ImportError:
+        pass
+
+    # 3. Intentar The Odds API
     api_data = fetch_odds_from_api(home_team, away_team)
     if api_data and api_data.get("home_odds"):
         api_data["source"] = "api"
         _set_cache(key, api_data)
         return api_data
 
-    # 3. Fallback sintético
+    # 4. Fallback sintético
     if model_probs:
         synth = generate_synthetic_odds(
             model_probs["prob_home"],

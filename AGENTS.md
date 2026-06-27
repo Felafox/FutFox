@@ -9,8 +9,8 @@ Python Backend Developer.
 
 ### 1. Modelo Matemático Predictivo
 - **Distribución de Poisson compuesta** con descomposición Ataque/Defensa:
-  - λ_H = Atk_H × Def_A × Ḡ_local × γ × α_H
-  - λ_A = Atk_A × Def_H × Ḡ_visitante × α_A
+  - λ_H = Atk_H × Def_A × G_neutral × γ × α_H
+  - λ_A = Atk_A × Def_H × G_neutral × α_A
 - **Ventaja de local (γ):** 1.36 (Dixon & Coles, 1997; Pollard, 2006)
 - **Factor de ajuste por jugadores (α):** modula λ según el rendimiento individual (xGI/90)
   de los 3 jugadores clave de cada equipo

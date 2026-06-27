@@ -400,7 +400,7 @@ if __name__ == "__main__":
     print("Test de player_impact.py\n")
 
     try:
-        league_stats, home_players, away_players, league_avgs = run_collection(
+        league_stats, home_players, away_players, league_avgs, _ = run_collection(
             league="EPL", season=2024,
             home_team="Arsenal", away_team="Chelsea",
         )

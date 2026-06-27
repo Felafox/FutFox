@@ -38,9 +38,17 @@ MAX_GOALS = 10
 # Mínimo valor permitido para λ (evitar λ = 0 que rompe la Poisson)
 MIN_LAMBDA = 0.01
 
-# Máximo valor permitido para λ (sanity check: >8 goles esperados es irreal
+# Máximo valor permitido para λ (sanity check: >5 goles esperados es irreal
 # incluso para el mejor equipo contra el peor)
-MAX_LAMBDA = 8.0
+MAX_LAMBDA = 5.0
+
+# Umbral de advertencia para λ: si λ supera este valor, se emite un warning
+# (no bloquea la predicción, solo advierte de posible anomalía)
+LAMBDA_WARN_THRESHOLD = 3.0
+
+# Umbral de advertencia para probabilidad de un resultado: si algún resultado
+# (local/empate/visitante) supera este valor, se emite un warning
+PROB_DOMINANCE_WARN = 0.75
 
 # ---------------------------------------------------------------------------
 # Parámetros del modelo de impacto de jugadores
@@ -95,16 +103,31 @@ CACHE_DIR = "data/cache"
 PREDICTIONS_LOG_PATH = "data/predictions.jsonl"
 
 # ---------------------------------------------------------------------------
+# WorldCup26.ir API (datos en tiempo real del Mundial 2026)
+# API gratuita, sin autenticación. Fuente: https://worldcup26.ir
+# ---------------------------------------------------------------------------
+WORLDCUP_API_BASE_URL = "https://worldcup26.ir"
+LIVE_CACHE_TTL = 60       # segundos — caché de partidos (refrescar cada minuto)
+STATIC_CACHE_TTL = 300    # segundos — caché de equipos/estadios (cada 5 min)
+API_TIMEOUT = 5            # segundos — timeout de conexión a la API
+
 # ---------------------------------------------------------------------------
 # The Odds API (cuotas de casas de apuestas)
 # ---------------------------------------------------------------------------
 
 # Registrate gratis en https://the-odds-api.com para obtener tu API key
-# La app intenta leer de st.secrets en Streamlit Cloud, sino usa este valor
-# Si está vacío, la app funciona con odds sintéticas
-THE_ODDS_API_KEY = "f3d1d6aefaa519f2d1db30c07f01939a"
+# La app lee de st.secrets en Streamlit Cloud o variable de entorno FUTFOX_ODDS_API_KEY.
+# Si está vacío, la app funciona con odds sintéticas.
+THE_ODDS_API_KEY = ""
 
-# Al importar, intentar override desde Streamlit secrets si existe
+# Al importar, intentar override desde Streamlit secrets o variable de entorno
+try:
+    import os as _os
+    _env_key = _os.environ.get("FUTFOX_ODDS_API_KEY", "")
+    if _env_key:
+        THE_ODDS_API_KEY = _env_key
+except Exception:
+    pass
 try:
     import streamlit as _st
     _secret_key = _st.secrets.get("THE_ODDS_API_KEY", "")
@@ -126,6 +149,47 @@ ODDS_REGIONS = "us,eu,uk"
 
 # Tiempo de caché de odds (segundos) — free tier: 500 req/mes
 ODDS_CACHE_TTL = 3600  # 1 hora
+
+# ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# Mapa de nombres de equipos: API (inglés) → UI / Fallback (español)
+# La API worldcup26.ir retorna nombres en inglés; los fallbacks y odds usan
+# español. Este mapa unifica ambos mundos.
+# ---------------------------------------------------------------------------
+TEAM_NAME_MAP = {
+    "Panama": "Panamá", "England": "Inglaterra", "Croatia": "Croacia",
+    "Ghana": "Ghana", "Colombia": "Colombia", "Portugal": "Portugal",
+    "Democratic Republic of the Congo": "Congo DR",
+    "Uzbekistan": "Uzbekistán", "Jordan": "Jordania",
+    "Argentina": "Argentina", "Algeria": "Argelia", "Austria": "Austria",
+    "South Africa": "Sudáfrica", "Canada": "Canadá", "Brazil": "Brasil",
+    "Japan": "Japón", "Germany": "Alemania", "Paraguay": "Paraguay",
+    "Netherlands": "Países Bajos", "Morocco": "Marruecos",
+    "Ivory Coast": "Costa de Marfil", "Norway": "Noruega",
+    "Mexico": "México", "South Korea": "Corea del Sur",
+    "Senegal": "Senegal", "France": "Francia", "Spain": "España",
+    "Uruguay": "Uruguay", "Iran": "Irán", "New Zealand": "Nueva Zelanda",
+    "Egypt": "Egipto", "Belgium": "Bélgica", "Saudi Arabia": "Arabia Saudita",
+    "Cape Verde": "Cabo Verde", "United States": "Estados Unidos",
+    "Ecuador": "Ecuador", "Italy": "Italia", "Denmark": "Dinamarca",
+    "Nigeria": "Nigeria", "Cameroon": "Camerún", "Serbia": "Serbia",
+    "Switzerland": "Suiza", "Tunisia": "Túnez", "Australia": "Australia",
+    "Sweden": "Suecia", "Peru": "Perú", "Chile": "Chile",
+    "Costa Rica": "Costa Rica", "Qatar": "Qatar", "Turkey": "Turquía",
+    "Bosnia and Herzegovina": "Bosnia y Herzegovina",
+    "Iraq": "Irak", "Haiti": "Haití", "Scotland": "Escocia",
+    "Curaçao": "Curazao", "Czech Republic": "República Checa",
+    "Sudan": "Sudán", "Greece": "Grecia", "Wales": "Gales",
+    "Ukraine": "Ucrania", "Poland": "Polonia", "Romania": "Rumania",
+    "Slovakia": "Eslovaquia", "Hungary": "Hungría", "Bulgaria": "Bulgaria",
+    "Ireland": "Irlanda", "Finland": "Finlandia",
+    "Venezuela": "Venezuela", "Bolivia": "Bolivia",
+}
+
+# ---------------------------------------------------------------------------
+# Auto-refresh de la UI (Streamlit)
+# ---------------------------------------------------------------------------
+AUTO_REFRESH_SECONDS = 60  # segundos entre recargas automáticas
 
 # ---------------------------------------------------------------------------
 # Formatos de display

@@ -1,0 +1,39 @@
+# ── Git ──────────────────────────────────────────────
+.git/
+.gitignore
+.gitattributes
+
+# ── Python ───────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+dist/
+build/
+*.egg
+
+# ── IDE ──────────────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# ── macOS ────────────────────────────────────────────
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# ── Datos locales / caché (se generan en runtime) ────
+data/
+*.csv
+*.log
+predictions.jsonl
+
+# ── Entorno ──────────────────────────────────────────
+.env
+.env.local
+*.env
+
+# ── Documentación (no necesaria en imagen) ───────────
+AGENTS.md
+README.md

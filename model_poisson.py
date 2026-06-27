@@ -48,6 +48,8 @@ from constants import (
     MAX_LAMBDA,
     MIN_LAMBDA,
     PROB_SUM_TOLERANCE,
+    LAMBDA_WARN_THRESHOLD,
+    PROB_DOMINANCE_WARN,
 )
 
 
@@ -190,8 +192,8 @@ def calculate_lambda(
           de los jugadores clave.
 
     Matemática completa:
-        λ_local = Atk_H × Def_A × G_avg_local × γ × α_H
-        λ_visit  = Atk_A × Def_H × G_avg_visit × α_A
+        λ_local = Atk_H × Def_A × G_neutral × γ × α_H
+        λ_visit  = Atk_A × Def_H × G_neutral × α_A
 
     Parameters
     ----------
@@ -411,20 +413,26 @@ def predict_match(
     # ------------------------------------------------------------------
     # Paso 2: Cálculo de λ para cada equipo
     # ------------------------------------------------------------------
-    # Para el local: su ataque × defensa del rival × promedio goles local × γ
+    # Usamos G_neutral = avg_goals_per_game / 2 como línea base de goles
+    # esperados por equipo en campo neutral. Luego γ (HOME_ADVANTAGE) ajusta
+    # al local. Esto evita la doble contabilización de la ventaja local que
+    # ocurría al usar avg_gf_home (que ya contiene el 58% de share).
+    g_neutral = league_averages["avg_goals_per_game"] / 2.0
+
+    # λ_local = Atk_H × Def_A × G_neutral × γ × α_H
     lambda_home = calculate_lambda(
         attack_strength=att_home,
         opponent_defense_strength=def_away,
-        league_avg_goals=league_averages["avg_gf_home"],
+        league_avg_goals=g_neutral,
         is_home=True,
         player_adjustment=player_adjustment_home,
     )
 
-    # Para el visitante: su ataque × defensa del rival × promedio goles visitante
+    # λ_visit = Atk_A × Def_H × G_neutral × α_A  (sin γ)
     lambda_away = calculate_lambda(
         attack_strength=att_away,
         opponent_defense_strength=def_home,
-        league_avg_goals=league_averages["avg_gf_away"],
+        league_avg_goals=g_neutral,
         is_home=False,
         player_adjustment=player_adjustment_away,
     )
@@ -495,6 +503,107 @@ def predict_match(
     return prediction
 
 
+def predict_match_live(
+    home_team: str,
+    away_team: str,
+    current_minute: int,
+    current_score_home: int,
+    current_score_away: int,
+    lambda_home: float,
+    lambda_away: float,
+    attack_strength_home: float = 1.0,
+    defense_strength_home: float = 1.0,
+    attack_strength_away: float = 1.0,
+    defense_strength_away: float = 1.0,
+) -> MatchPrediction:
+    """
+    Predice el resultado de un partido EN VIVO ajustando λ al tiempo restante.
+
+    Matemática:
+      λ_rem = λ_original × (minutos_restantes / 95)
+      P_final(i, j) = Poisson(i - gol_actual | λ_rem_H) × Poisson(j - gol_actual | λ_rem_A)
+
+    Donde i ∈ [current_score_home, MAX_GOALS], j ∈ [current_score_away, MAX_GOALS].
+    Probabilidades para marcadores menores al actual son 0 (ya ocurrieron).
+
+    Parameters
+    ----------
+    current_minute : int
+        Minuto actual del partido (0-90+).
+    current_score_home : int
+        Goles del local hasta el momento.
+    current_score_away : int
+        Goles del visitante hasta el momento.
+    lambda_home, lambda_away : float
+        λ originales (90 minutos) del modelo pre-partido.
+    attack/defense strengths : float
+        Para completar el MatchPrediction.
+
+    Returns
+    -------
+    MatchPrediction actualizado con probabilidades en vivo.
+    """
+    # Minutos restantes (mínimo 5 para evitar distorsiones al final)
+    remaining = max(95 - current_minute, 5)
+    ratio = remaining / 95.0
+
+    # λ ajustado al tiempo restante
+    lam_rem_h = lambda_home * ratio
+    lam_rem_a = lambda_away * ratio
+
+    # Construir matriz de probabilidad para goles ADICIONALES
+    rem_matrix = build_score_probability_matrix(lam_rem_h, lam_rem_a)
+
+    # Shift: construir matriz final P_final(i,j)
+    final_matrix = np.zeros((MAX_GOALS + 1, MAX_GOALS + 1))
+    for i in range(current_score_home, min(current_score_home + MAX_GOALS, MAX_GOALS) + 1):
+        for j in range(current_score_away, min(current_score_away + MAX_GOALS, MAX_GOALS) + 1):
+            di = i - current_score_home
+            dj = j - current_score_away
+            if di <= MAX_GOALS and dj <= MAX_GOALS:
+                final_matrix[i, j] = rem_matrix[di, dj]
+
+    # Normalizar (la matriz truncada puede no sumar 1.0)
+    total = np.sum(final_matrix)
+    if total > 0:
+        final_matrix = final_matrix / total
+
+    # Calcular probabilidades agregadas
+    prob_home, prob_draw, prob_away, prob_over_25, prob_btts = (
+        compute_match_probabilities(final_matrix)
+    )
+
+    # Marcadores más probables
+    top_scores = find_top_scores(final_matrix, top_n=5)
+    most_likely_score, most_likely_score_prob = top_scores[0] if top_scores else ("N/A", 0.0)
+
+    prediction = MatchPrediction(
+        home_team=home_team,
+        away_team=away_team,
+        lambda_home=lam_rem_h,
+        lambda_away=lam_rem_a,
+        prob_home=prob_home,
+        prob_draw=prob_draw,
+        prob_away=prob_away,
+        most_likely_score=most_likely_score,
+        most_likely_score_prob=most_likely_score_prob,
+        top_scores=top_scores,
+        prob_over_25=prob_over_25,
+        prob_btts=prob_btts,
+        expected_goals=(lam_rem_h + lam_rem_a) + current_score_home + current_score_away,
+        attack_strength_home=attack_strength_home,
+        defense_strength_home=defense_strength_home,
+        attack_strength_away=attack_strength_away,
+        defense_strength_away=defense_strength_away,
+        score_matrix=final_matrix,
+    )
+
+    # Sanity checks
+    _sanity_check_prediction(prediction)
+
+    return prediction
+
+
 def _sanity_check_prediction(pred: MatchPrediction) -> Tuple[bool, List[str]]:
     """
     Verifica que una predicción sea matemáticamente válida.
@@ -504,6 +613,9 @@ def _sanity_check_prediction(pred: MatchPrediction) -> Tuple[bool, List[str]]:
     2. Ninguna probabilidad es negativa
     3. Las probabilidades principales suman aproximadamente 1.0
     4. La matriz de score no contiene NaN o inf
+    5. Marcador más probable tiene probabilidad > 0
+    6. (WARNING) λ > LAMBDA_WARN_THRESHOLD: partido muy desbalanceado
+    7. (WARNING) Probabilidad de algún resultado > PROB_DOMINANCE_WARN
 
     Parameters
     ----------
@@ -574,6 +686,29 @@ def _sanity_check_prediction(pred: MatchPrediction) -> Tuple[bool, List[str]]:
             f"tiene probabilidad {pred.most_likely_score_prob:.6f} ≤ 0"
         )
         is_valid = False
+
+    # Check 6 (WARNING): λ demasiado alto — partido muy desbalanceado
+    for team, lam in [("local", pred.lambda_home), ("visitante", pred.lambda_away)]:
+        if lam > LAMBDA_WARN_THRESHOLD:
+            warnings_list.append(
+                f"🟡 λ_{team} = {lam:.4f} > LAMBDA_WARN_THRESHOLD ({LAMBDA_WARN_THRESHOLD}). "
+                f"El partido puede estar excesivamente desbalanceado. "
+                f"Verificar datos de entrada y fórmula de λ."
+            )
+
+    # Check 7 (WARNING): Probabilidad de algún resultado > 75%
+    prob_results = [
+        ("Victoria Local", pred.prob_home),
+        ("Empate", pred.prob_draw),
+        ("Victoria Visitante", pred.prob_away),
+    ]
+    for name, prob in prob_results:
+        if prob > PROB_DOMINANCE_WARN:
+            warnings_list.append(
+                f"🟡 {name} = {prob*100:.1f}% > PROB_DOMINANCE_WARN "
+                f"({PROB_DOMINANCE_WARN*100:.0f}%). "
+                f"Resultado sospechosamente dominante. Revisar parámetros del modelo."
+            )
 
     return is_valid, warnings_list
 
@@ -670,7 +805,7 @@ if __name__ == "__main__":
 
     try:
         # Obtener datos
-        league_stats, home_players, away_players, league_avgs = run_collection(
+        league_stats, home_players, away_players, league_avgs, _ = run_collection(
             league="EPL", season=2024,
             home_team="Arsenal", away_team="Chelsea",
         )
