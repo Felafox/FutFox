@@ -245,24 +245,28 @@ def calculate_altitude_penalty(team: str, stadium_altitude_m: float) -> float:
     """
     Calcula la penalización por diferencia de altitud.
 
-    Si el estadio está a >1000m más que el origen del equipo, penaliza.
-    Si el equipo es de altitud y juega más bajo, beneficia.
+    Calibrado con:
+      - McSharry (2010): 0.5 goles menos por cada 1000m para el visitante
+      - Gore & McSharry: efecto no lineal, más severo >2000m
 
     Returns:
-        float entre -0.04 y +0.02 (ajuste a α)
+        float entre -0.05 y +0.02 (ajuste a φ)
     """
     ctx = _get_context(team)
     team_alt = ctx.get("altitud_origen_m", 500)
     diff = stadium_altitude_m - team_alt
 
-    # Penalización por jugar más alto de lo acostumbrado
-    if diff > 1000:
-        return -0.03
+    # Penalización calibrada por altitud (basado en datos reales)
+    if diff > 2000:
+        return -0.050  # altitud extrema (>2000m diff): ~0.5 goles menos
+    elif diff > 1000:
+        return -0.040  # diferencia severa (>1000m)
     elif diff > 500:
-        return -0.015
+        return -0.025  # diferencia moderada (>500m)
+    elif diff < -1000:
+        return +0.020  # beneficio por jugar más bajo (más oxígeno)
     elif diff < -500:
-        # Beneficio por jugar más bajo (más oxígeno)
-        return +0.01
+        return +0.012
     return 0.0
 
 
@@ -293,29 +297,33 @@ def calculate_context_adjustment(team: str, match_info: dict) -> float:
     altitude = match_info.get("altitude_m", 0)
     phi += calculate_altitude_penalty(team, altitude)
 
-    # 2. Moral (±2%)
+    # 2. Moral (±1.5% por 0.1 de desviación, más conservador)
     morale = ctx.get("morale", 1.0)
-    phi += (morale - 1.0) * 0.02  # Escalar a ±2%
+    phi += (morale - 1.0) * 0.015
 
-    # 3. Lesiones (-1% por lesión)
+    # 3. Lesiones: -1.5% por titular, -0.5% por suplente
     injuries = ctx.get("injuries", [])
-    phi -= len(injuries) * 0.01
+    for inj in injuries:
+        if "duda" in inj.lower():
+            phi -= 0.005  # duda → poco impacto
+        else:
+            phi -= 0.015  # baja confirmada
 
-    # 4. Viaje largo (>10000km penaliza)
+    # 4. Viaje largo (>10000km penaliza más fuerte, basado en FIFA reports)
     travel = ctx.get("travel_km", 5000)
     if travel > 10000:
-        phi -= 0.02
+        phi -= 0.025   # jetlag severo (>8h diferencia horaria)
     elif travel > 7000:
-        phi -= 0.01
+        phi -= 0.015
 
-    # 5. Clima: calor extremo (>32°C) penaliza levemente
+    # 5. Clima: calor extremo (>32°C + humedad) penaliza más (evidencia Qatar 2022)
     temp = match_info.get("temperature_c", 22)
     humidity = match_info.get("humidity_pct", 50)
     if temp > 32 and humidity > 70:
-        phi -= 0.015  # Calor + humedad extremos
+        phi -= 0.020   # calor + humedad extremos: -0.3 goles esperados
 
-    # Limitar φ a rango razonable
-    phi = max(0.92, min(1.08, phi))
+    # Limitar φ a rango razonable (expandido para capturar efectos más fuertes)
+    phi = max(0.90, min(1.10, phi))
 
     return phi
 

@@ -43,13 +43,19 @@ import pandas as pd
 from scipy.stats import poisson
 
 from constants import (
+    DIXON_COLES_RHO,
+    G_NEUTRAL_STRENGTH_WEIGHT,
+    GOAL_TIME_DECAY,
     HOME_ADVANTAGE,
+    LAMBDA_WARN_THRESHOLD,
+    LIVE_INTENSITY_FACTOR,
     MAX_GOALS,
     MAX_LAMBDA,
     MIN_LAMBDA,
-    PROB_SUM_TOLERANCE,
-    LAMBDA_WARN_THRESHOLD,
     PROB_DOMINANCE_WARN,
+    PROB_SUM_TOLERANCE,
+    SHRINKAGE_FACTOR,
+    TOURNAMENT_PHASE_GOAL_FACTOR,
 )
 
 
@@ -127,29 +133,32 @@ class MatchPrediction:
 def calculate_strengths(
     team_name: str,
     league_stats: pd.DataFrame,
+    shrinkage: float = SHRINKAGE_FACTOR,
 ) -> Tuple[float, float]:
     """
     Calcula las fuerzas de ataque y defensa de un equipo respecto al promedio
-    de la liga.
+    de la liga, con shrinkage Bayesiano hacia la media.
 
     Matemática:
-      FuerzaAtaque_i = GF_per_game_i / avg(GF_per_game_liga)
-      FuerzaDefensa_i = GA_per_game_i / avg(GA_per_game_liga)
+      FuerzaAtaque_i = (1-s) × (GF_per_game_i / avg(GF_per_game_liga)) + s × 1.0
+      FuerzaDefensa_i = (1-s) × (GA_per_game_i / avg(GA_per_game_liga)) + s × 1.0
+
+    El shrinkage estabiliza equipos con pocos partidos (torneos cortos).
+    s = 0: datos crudos. s = 1: todo a la media.
 
     Parameters
     ----------
     team_name : str
         Nombre del equipo.
     league_stats : pd.DataFrame
-        DataFrame con estadísticas de todos los equipos (de data_collection).
+        DataFrame con estadísticas de todos los equipos.
+    shrinkage : float
+        Factor de regresión a la media (default SHRINKAGE_FACTOR).
 
     Returns
     -------
     attack_strength : float
-        Factor de fuerza ofensiva (>1 = mejor que el promedio).
     defense_strength : float
-        Factor de fuerza defensiva (<1 = mejor que el promedio, ya que
-        significa que concede menos goles).
     """
     team_row = league_stats[league_stats["team"] == team_name]
     if team_row.empty:
@@ -167,8 +176,12 @@ def calculate_strengths(
     if league_avg_ga == 0:
         league_avg_ga = 1.0
 
-    attack_strength = team_gf_per_game / league_avg_gf
-    defense_strength = team_ga_per_game / league_avg_ga
+    raw_attack = team_gf_per_game / league_avg_gf
+    raw_defense = team_ga_per_game / league_avg_ga
+
+    # Shrinkage Bayesiano: regresión a la media
+    attack_strength = (1 - shrinkage) * raw_attack + shrinkage * 1.0
+    defense_strength = (1 - shrinkage) * raw_defense + shrinkage * 1.0
 
     return attack_strength, defense_strength
 
@@ -268,6 +281,59 @@ def build_score_probability_matrix(lambda_home: float, lambda_away: float) -> np
     matrix = np.outer(home_probs, away_probs)
 
     return matrix
+
+
+def apply_dixon_coles_adjustment(
+    score_matrix: np.ndarray,
+    lambda_home: float,
+    lambda_away: float,
+    rho: float = DIXON_COLES_RHO,
+) -> np.ndarray:
+    """
+    Aplica el ajuste de correlación Dixon & Coles (1997) a la matriz
+    de probabilidad conjunta.
+
+    Corrige la subestimación de marcadores bajos (0-0, 1-0, 0-1, 1-1)
+    que ocurre al asumir independencia entre los goles de ambos equipos.
+
+    Matemática:
+      P_adj(i, j) = τ(i, j) × P(i, j)
+      τ(0,0) = 1 + λ_H × λ_A × ρ
+      τ(0,1) = 1 − λ_H × ρ
+      τ(1,0) = 1 − λ_A × ρ
+      τ(1,1) = 1 + ρ
+      τ(i,j) = 1  ∀ otro (i,j)
+
+    Luego se re-normaliza la matriz para que ΣP = 1.0.
+
+    Parameters
+    ----------
+    score_matrix : np.ndarray
+        Matriz de probabilidades P(i,j) asumiendo independencia.
+    lambda_home : float
+    lambda_away : float
+    rho : float
+        Parámetro de correlación (0.08 mundial, 0.15 ligas).
+
+    Returns
+    -------
+    np.ndarray con las probabilidades ajustadas.
+    """
+    tau = np.ones_like(score_matrix)
+    tau[0, 0] = 1.0 + lambda_home * lambda_away * rho
+    tau[0, 1] = 1.0 - lambda_home * rho
+    tau[1, 0] = 1.0 - lambda_away * rho
+    tau[1, 1] = 1.0 + rho
+
+    # Asegurar que τ no sea negativo para marcadores 0-1 y 1-0
+    tau = np.maximum(tau, 0.01)
+
+    adjusted = score_matrix * tau
+    total = np.sum(adjusted)
+    if total > 0:
+        adjusted /= total
+
+    return adjusted
 
 
 def compute_match_probabilities(
@@ -419,6 +485,15 @@ def predict_match(
     # ocurría al usar avg_gf_home (que ya contiene el 58% de share).
     g_neutral = league_averages["avg_goals_per_game"] / 2.0
 
+    # Ajuste dinámico por fuerza relativa: partidos entre equipos muy
+    # desiguales tienden a tener más goles totales.
+    strength_diff = abs(att_home - att_away)
+    g_neutral *= (1.0 + strength_diff * G_NEUTRAL_STRENGTH_WEIGHT)
+
+    # Ajuste por fase del torneo: eliminatorias tienen menos goles
+    tournament_phase = league_averages.get("phase", "group")
+    g_neutral *= TOURNAMENT_PHASE_GOAL_FACTOR.get(tournament_phase, 1.0)
+
     # λ_local = Atk_H × Def_A × G_neutral × γ × α_H
     lambda_home = calculate_lambda(
         attack_strength=att_home,
@@ -441,6 +516,11 @@ def predict_match(
     # Paso 3: Matriz de probabilidad de marcadores
     # ------------------------------------------------------------------
     score_matrix = build_score_probability_matrix(lambda_home, lambda_away)
+
+    # Ajuste Dixon & Coles: corregir subestimación de marcadores bajos
+    score_matrix = apply_dixon_coles_adjustment(
+        score_matrix, lambda_home, lambda_away, DIXON_COLES_RHO,
+    )
 
     # ------------------------------------------------------------------
     # Paso 4: Probabilidades agregadas
@@ -547,12 +627,37 @@ def predict_match_live(
     remaining = max(95 - current_minute, 5)
     ratio = remaining / 95.0
 
-    # λ ajustado al tiempo restante
-    lam_rem_h = lambda_home * ratio
-    lam_rem_a = lambda_away * ratio
+    # ── Time-decay: más goles al final del partido ─────────────────
+    time_multiplier = 1.0 + GOAL_TIME_DECAY * (current_minute / 90.0)
+
+    # ── Intensidad por diferencia de goles ─────────────────────────
+    goal_diff = current_score_home - current_score_away
+    if goal_diff >= 2:
+        intensity_h = LIVE_INTENSITY_FACTOR["leading_2plus"]
+        intensity_a = LIVE_INTENSITY_FACTOR["trailing_2plus"]
+    elif goal_diff == 1:
+        intensity_h = LIVE_INTENSITY_FACTOR["leading_1"]
+        intensity_a = LIVE_INTENSITY_FACTOR["trailing_1"]
+    elif goal_diff <= -2:
+        intensity_h = LIVE_INTENSITY_FACTOR["trailing_2plus"]
+        intensity_a = LIVE_INTENSITY_FACTOR["leading_2plus"]
+    elif goal_diff == -1:
+        intensity_h = LIVE_INTENSITY_FACTOR["trailing_1"]
+        intensity_a = LIVE_INTENSITY_FACTOR["leading_1"]
+    else:
+        intensity_h = intensity_a = LIVE_INTENSITY_FACTOR["tied"]
+
+    # λ ajustado al tiempo restante con time-decay e intensidad
+    lam_rem_h = lambda_home * ratio * time_multiplier * intensity_h
+    lam_rem_a = lambda_away * ratio * time_multiplier * intensity_a
 
     # Construir matriz de probabilidad para goles ADICIONALES
     rem_matrix = build_score_probability_matrix(lam_rem_h, lam_rem_a)
+
+    # Ajuste Dixon & Coles para la matriz de goles restantes
+    rem_matrix = apply_dixon_coles_adjustment(
+        rem_matrix, lam_rem_h, lam_rem_a, DIXON_COLES_RHO,
+    )
 
     # Shift: construir matriz final P_final(i,j)
     final_matrix = np.zeros((MAX_GOALS + 1, MAX_GOALS + 1))

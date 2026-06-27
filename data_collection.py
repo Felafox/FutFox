@@ -28,9 +28,12 @@ from constants import (
     DATA_DIR,
     DEFAULT_LEAGUE,
     DEFAULT_SEASON,
+    FORM_DECAY_DAYS,
     HOME_GOAL_SHARE,
+    LIVE_DATA_WEIGHT,
     MAX_RETRIES,
     RETRY_DELAY,
+    SHRINKAGE_FACTOR,
     TEAM_NAME_MAP,
 )
 
@@ -281,8 +284,138 @@ FALLBACK_WORLD_CUP_PLAYERS = {
 
 
 # ======================================================================
-# Bloque principal de extracción de datos
+# Funciones de retroalimentación con resultados reales del torneo
 # ======================================================================
+
+def _compute_match_weight(match_date_str: str, decay_days: int = FORM_DECAY_DAYS) -> float:
+    """
+    Peso exponencial para un partido según su fecha.
+    Partido de hoy pesa 1.0, de hace decay_days días pesa ~0.37.
+    
+    Args:
+        match_date_str: fecha en formato "MM/DD/YYYY HH:MM" o "YYYY-MM-DD HH:MM"
+        decay_days: días para decaimiento e^(-1)
+    
+    Returns:
+        float en (0, 1]
+    """
+    if not match_date_str or match_date_str == "N/A":
+        return 0.3  # peso mínimo para fechas desconocidas
+    try:
+        if "/" in match_date_str:
+            match_date = datetime.strptime(match_date_str, "%m/%d/%Y %H:%M")
+        else:
+            match_date = datetime.strptime(match_date_str, "%Y-%m-%d %H:%M")
+    except (ValueError, TypeError):
+        return 0.3
+    days_ago = max((datetime.now() - match_date).days, 0)
+    return np.exp(-days_ago / decay_days)
+
+
+def _compute_live_standings(
+    league_stats: pd.DataFrame,
+    team_fallback: dict,
+    player_fallback: dict,
+    is_world_cup: bool,
+) -> pd.DataFrame:
+    """
+    Enriquece league_stats con resultados reales del torneo desde la API.
+    
+    Fusiona datos de partidos finished de worldcup26.ir con el fallback
+    histórico usando shrinkage (LIVE_DATA_WEIGHT para datos reales).
+    Aplica weighting temporal para que partidos recientes pesen más.
+    
+    Returns:
+        league_stats actualizado con gf_per_game y ga_per_game combinados.
+    """
+    try:
+        from worldcup_schedule import _map_api_game
+        import live_api
+        api_games = live_api.fetch_games()
+    except Exception:
+        return league_stats  # sin acceso a API, usar solo fallback
+    
+    if not api_games:
+        return league_stats
+    
+    # Acumular stats de partidos terminados con weighting temporal
+    live_gf = {}    # goles a favor ponderados
+    live_ga = {}    # goles en contra ponderados
+    live_gp = {}    # partidos jugados ponderados
+    
+    for g in api_games:
+        try:
+            mapped = _map_api_game(g)
+        except Exception:
+            continue
+        if mapped.get("status") != "finished":
+            continue
+        
+        h, a = mapped["home"], mapped["away"]
+        sh = mapped.get("score_home") or 0
+        sa = mapped.get("score_away") or 0
+        weight = _compute_match_weight(g.get("local_date", ""))
+        
+        for team in [h, a]:
+            if team not in live_gf:
+                live_gf[team] = 0.0
+                live_ga[team] = 0.0
+                live_gp[team] = 0.0
+        
+        live_gf[h] += sh * weight
+        live_ga[h] += sa * weight
+        live_gp[h] += weight
+        
+        live_gf[a] += sa * weight
+        live_ga[a] += sh * weight
+        live_gp[a] += weight
+    
+    if not live_gf:
+        return league_stats  # sin partidos finished aún
+    
+    # Merge con fallback histórico
+    for team_name in live_gf:
+        if live_gp[team_name] < 0.5:
+            continue  # menos de 0.5 "partidos equivalentes" → ignorar
+        
+        row_mask = league_stats["team"] == team_name
+        fb = team_fallback.get(team_name, {})
+        
+        if not fb:
+            # Equipo sin datos históricos: usar solo datos reales
+            per_game_gf = live_gf[team_name] / live_gp[team_name]
+            per_game_ga = live_ga[team_name] / live_gp[team_name]
+            if row_mask.any():
+                league_stats.loc[row_mask, "gf_per_game"] = per_game_gf
+                league_stats.loc[row_mask, "ga_per_game"] = per_game_ga
+            else:
+                new_row = pd.DataFrame([{
+                    "team": team_name,
+                    "gp": int(live_gp[team_name]),
+                    "gf": int(live_gf[team_name]),
+                    "ga": int(live_ga[team_name]),
+                    "xG": per_game_gf * 18,
+                    "xGA": per_game_ga * 18,
+                    "shots": int(per_game_gf * 14 * 18),
+                    "gf_per_game": per_game_gf,
+                    "ga_per_game": per_game_ga,
+                }])
+                league_stats = pd.concat([league_stats, new_row], ignore_index=True)
+        else:
+            # Shrinkage: combinar datos reales con históricos
+            fb_gf_pg = fb.get("gf", 0) / fb.get("gp", 18)
+            fb_ga_pg = fb.get("ga", 0) / fb.get("gp", 18)
+            live_gf_pg = live_gf[team_name] / live_gp[team_name]
+            live_ga_pg = live_ga[team_name] / live_gp[team_name]
+            
+            blended_gf = LIVE_DATA_WEIGHT * live_gf_pg + (1 - LIVE_DATA_WEIGHT) * fb_gf_pg
+            blended_ga = LIVE_DATA_WEIGHT * live_ga_pg + (1 - LIVE_DATA_WEIGHT) * fb_ga_pg
+            
+            if row_mask.any():
+                league_stats.loc[row_mask, "gf_per_game"] = blended_gf
+                league_stats.loc[row_mask, "ga_per_game"] = blended_ga
+    
+    return league_stats
 
 async def _fetch_understat_league(league: str, season: int) -> dict:
     """
@@ -460,6 +593,11 @@ async def collect_data(
     league_stats["xg_per_game"] = league_stats["xG"] / league_stats["gp"]
     league_stats["xga_per_game"] = league_stats["xGA"] / league_stats["gp"]
     league_stats["shots_per_game"] = league_stats["shots"] / league_stats["gp"]
+
+    # ── Retroalimentación con resultados reales del torneo ────────────
+    league_stats = _compute_live_standings(
+        league_stats, team_fallback, player_fallback, is_world_cup,
+    )
 
     # Calcular promedios de la liga
     total_games = league_stats["gp"].sum() / 2

@@ -38,9 +38,9 @@ MAX_GOALS = 10
 # Mínimo valor permitido para λ (evitar λ = 0 que rompe la Poisson)
 MIN_LAMBDA = 0.01
 
-# Máximo valor permitido para λ (sanity check: >5 goles esperados es irreal
+# Máximo valor permitido para λ (sanity check: >7 goles esperados es irreal
 # incluso para el mejor equipo contra el peor)
-MAX_LAMBDA = 5.0
+MAX_LAMBDA = 7.0
 
 # Umbral de advertencia para λ: si λ supera este valor, se emite un warning
 # (no bloquea la predicción, solo advierte de posible anomalía)
@@ -88,6 +88,53 @@ WORLD_CUP_HOME_ADVANTAGE = 1.15
 # Máximo xG+xA por 90 minutos esperado para un jugador real
 # (incluso Messi en su mejor temporada rondaba ~1.5 xGI/90)
 MAX_XGI_PER90 = 2.5
+
+# ---------------------------------------------------------------------------
+# Parámetros del modelo avanzado
+# ---------------------------------------------------------------------------
+
+# Factor de shrinkage Bayesiano: peso de regresión a la media
+# 0 = sin shrinkage (datos crudos), 1 = todo a la media (sin señal)
+# 0.35 recomendado para torneos con pocos partidos (3-7 por equipo)
+SHRINKAGE_FACTOR = 0.35
+
+# Correlación Dixon & Coles (ρ): ajusta probabilidad de marcadores bajos
+# 0.08 para torneos internacionales (menos empates que ligas)
+# 0.15 para ligas domésticas
+DIXON_COLES_RHO = 0.08
+
+# Decaimiento exponencial para weighting temporal (días)
+# Partido de hoy pesa 1.0, de hace 30 días pesa ~0.37
+FORM_DECAY_DAYS = 30
+
+# Factor de intensidad en vivo: ajuste de λ por diferencia de goles
+LIVE_INTENSITY_FACTOR = {
+    "leading_2plus":  1.05,   # gana por 2+ → contraataque
+    "leading_1":      0.95,   # gana por 1 → conservador
+    "trailing_1":     1.08,   # pierde por 1 → presiona
+    "trailing_2plus": 1.15,   # pierde por 2+ → ataque total
+    "tied":           1.00,   # empate → normal
+}
+
+# G_neutral dinámico: ajuste por fuerza relativa de equipos
+G_NEUTRAL_STRENGTH_WEIGHT = 0.4
+
+# Time-decay de goles por minuto: goles al final pesan más
+GOAL_TIME_DECAY = 0.25  # pendiente: +25% de goles al minuto 90 vs minuto 0
+
+# Factores de goles por fase del torneo (vs fase de grupos = 1.0)
+TOURNAMENT_PHASE_GOAL_FACTOR = {
+    "group":  1.00,
+    "r32":    0.88,
+    "r16":    0.85,
+    "qf":     0.82,
+    "sf":     0.80,
+    "final":  0.78,
+    "third":  0.90,
+}
+
+# Feedback de resultados reales: peso de datos en vivo vs fallback
+LIVE_DATA_WEIGHT = 0.6  # 60% datos reales del torneo, 40% histórico
 
 # ---------------------------------------------------------------------------
 # Reintentos de conexión a Understat

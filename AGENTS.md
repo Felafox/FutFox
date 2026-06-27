@@ -18,27 +18,26 @@ Python Backend Developer.
 - **Métricas derivadas:** Over/Under 2.5, BTTS (Both Teams To Score), Marcador Más Probable
 - **Sanity checks:** validación de rangos de λ, suma de probabilidades ≈ 1.0, NaN detection
 
-### 2. Fuentes de Datos
+### 4. Fuentes de Datos (v2.2)
 | Fuente | Propósito | Estado |
 |---|---|---|
-| **Understat API** | xG, xA, tiros, resultados de ligas europeas | Primario (asíncrono, 3 reintentos) |
-| **Fallback local** | Datos hardcodeados de Premier League 2023/24 (20 equipos, 5 jugadores c/u) | Respaldo automático |
-| **Caché local** | `data/cache/` para respuestas de Understat | Planificado (constantes definidas) |
+| **worldcup26.ir API** | Partidos, resultados, minutos en vivo del Mundial 2026 | Primario (caché 60s/300s) |
+| **Understat API** | xG, xA, tiros, resultados de ligas europeas | Secundario (asíncrono, 3 reintentos) |
+| **The Odds API** | Cuotas de casas de apuestas (Pinnacle, Bet365) | Terciario (free tier: 500 req/mes) |
+| **Odds México** | Cuotas hardcodeadas de Caliente/PlayDoit (Money Line 90') | Fallback offline |
+| **Fallback local (EPL)** | Datos hardcodeados de Premier League 2023/24 (20 equipos) | Respaldo modo liga |
+| **Fallback local (WC)** | Datos de 32 selecciones (eliminatorias 2023-25) + 11 jugadores | Respaldo modo Mundial |
+| **Caché local** | `data/cache/` para respuestas de APIs | Planificado |
 
-### 3. Métricas Avanzadas Utilizadas
-- **xG (Expected Goals):** Probabilidad de que un disparo resulte en gol
-- **xA (Expected Assists):** Probabilidad de que un pase resulte en asistencia
-- **xGI (Expected Goal Involvements):** xG + xA por 90 minutos
-- **Fuerza de Ataque:** GF_per_game / avg(GF_liga)
-- **Fuerza de Defensa:** GA_per_game / avg(GA_liga)
-
-### 4. Stack Técnico
+### 5. Stack Técnico (v2.2)
 | Capa | Tecnología |
 |---|---|
-| **Datos** | `understat` (async), fallback hardcodeado |
+| **Datos** | `requests` (worldcup26.ir + The Odds API), `understat` (async) |
 | **Modelo** | `scipy.stats.poisson`, `numpy` |
-| **Datos** | `pandas` (DataFrames para todo el output) |
+| **Procesamiento** | `pandas` (DataFrames para todo el output) |
 | **Display** | `tabulate` (tablas fancy_grid), barras ASCII |
+| **Web** | `streamlit` (UI interactiva, auto-refresh 60s) |
+| **Infra** | Docker, Streamlit Cloud |
 | **Lenguaje** | Python 3.13 |
 
 ## ARQUITECTURA DEL PROYECTO
@@ -46,24 +45,73 @@ Python Backend Developer.
 ```
 FutFox/
 ├── AGENTS.md                   ← Este archivo — instrucciones para el agente
-├── requirements.txt            ← Dependencias (pandas, numpy, scipy, understat, tabulate)
-├── constants.py                ← Todas las constantes centralizadas (parámetros del modelo)
-├── data_collection.py          ← Extracción de datos de Understat + fallback local
-├── model_poisson.py            ← Modelo matemático Poisson completo + sanity checks
+├── requirements.txt            ← Dependencias (pandas, numpy, scipy, understat, tabulate,
+│                                  streamlit, requests, aiohttp)
+├── constants.py                ← Todas las constantes centralizadas (parámetros del modelo,
+│                                  timezones, mapa de nombres)
+├── data_collection.py          ← Extracción de datos (API + fallback + retroalimentación
+│                                  con resultados reales del torneo)
+├── model_poisson.py            ← Modelo Poisson compuesto + Dixon & Coles ρ + shrinkage
+│                                  Bayesiano + predict_match_live() + sanity checks
 ├── player_impact.py            ← Análisis xGI/90 + ajuste α por jugadores clave
+├── player_context.py           ← Factores contextuales φ (altitud, viaje, moral, clima)
+├── live_api.py                 ← Cliente HTTP para API worldcup26.ir con caché
+├── worldcup_schedule.py        ← Fixture del Mundial 2026 + countdowns + timezone CST
+├── odds_fetcher.py             ← Cuotas de The Odds API + odds sintéticas + ensemble
+├── odds_mexico.py              ← Cuotas hardcodeadas de Caliente (México, Money Line 90')
+├── match_history.py            ← Resultados históricos de fase de grupos
+├── news_feed.py                ← Noticias deportivas por selección
+├── mcp_server.py               ← MCP Server para agentes AI (JSON-RPC sobre stdio)
+├── validate_data.py            ← Herramienta de diagnóstico del pipeline
 ├── main.py                     ← Orquestador CLI + output profesional en consola
-├── app.py                      ← Interfaz web con Streamlit (mismo pipeline, UI interactiva)
+├── app.py                      ← Interfaz web Streamlit (Mundial 2026 en vivo)
+├── Dockerfile                  ← Imagen Docker (Python 3.13-slim)
+├── docker-compose.yml          ← Servicios: web, cli, cli-default
+├── .streamlit/
+│   ├── config.toml             ← Configuración de Streamlit (puerto, CORS)
+│   └── secrets.toml            ← Secrets locales (en .gitignore, no se sube)
+├── scripts/
+│   ├── build_app.sh            ← Builder de FutFox.app para macOS
+│   └── futfox_launcher.sh      ← Launcher nativo macOS
 └── data/                       ← Directorio de caché (creado automáticamente)
-    └── cache/                  ← Caché de respuestas de Understat
+    └── cache/                  ← Caché de respuestas de APIs
 ```
 
-### Flujo de Datos
+### Flujo de Datos — Modo Copa del Mundo 2026
 
 ```
-Understat API (async)
+worldcup26.ir API (HTTP, caché 60s)
     │
     ▼
-data_collection.py (3 reintentos + fallback local)
+live_api.py → worldcup_schedule.py (mapeo de partidos, countdowns, timezone CST)
+    │
+    ▼
+data_collection.py (fallback WC + retroalimentación con resultados reales finished)
+    │
+    ▼
+player_impact.py (xGI/90 → top 3 jugadores → α ajuste por equipo)
+    │
+    ▼
+player_context.py (φ: altitud, viaje, moral, lesiones, clima)
+    │
+    ▼
+model_poisson.py (Poisson compuesto + Dixon & Coles ρ + shrinkage Bayesiano
+    + predict_match_live() para partidos en curso)
+    │
+    ▼
+odds_fetcher.py (The Odds API o sintético → ensemble 40% modelo / 60% mercado)
+    │
+    ▼
+app.py (Streamlit: partidos en vivo, próximos, comenzando, análisis unificado)
+```
+
+### Flujo de Datos — Modo Liga (CLI)
+
+```
+Understat API (async, 3 reintentos)
+    │
+    ▼
+data_collection.py (fallback EPL si Understat no responde)
     │
     ▼
 player_impact.py (xGI/90 → top 3 jugadores → α ajuste)
@@ -117,16 +165,28 @@ main.py (orquestador → tablas formateadas en consola)
 | Parámetro | Valor | Significado |
 |---|---|---|
 | `HOME_ADVANTAGE` | 1.36 | Ventaja del equipo local (γ) |
+| `WORLD_CUP_HOME_ADVANTAGE` | 1.15 | γ reducido para torneos en sede neutral |
 | `HOME_GOAL_SHARE` | 0.58 | % histórico de goles del local en EPL |
 | `MAX_GOALS` | 10 | Máximo de goles en la matriz de probabilidad |
 | `MIN_LAMBDA` | 0.01 | Mínimo λ permitido |
-| `MAX_LAMBDA` | 8.0 | Máximo λ permitido (sanity check) |
+| `MAX_LAMBDA` | 7.0 | Máximo λ permitido (sanity check) |
+| `LAMBDA_WARN_THRESHOLD` | 3.0 | Umbral de advertencia para λ |
+| `PROB_DOMINANCE_WARN` | 0.75 | Umbral de warning para dominancia extrema |
 | `BETA` | 0.15 | Sensibilidad del ajuste α por jugadores |
-| `MIN_MINUTES` | 450 | Minutos mínimos para jugador "clave" (~5 partidos) |
-| `ALPHA_MIN` | 0.80 | Mínimo ajuste α por jugadores |
-| `ALPHA_MAX` | 1.20 | Máximo ajuste α por jugadores |
+| `MIN_MINUTES` | 450 | Minutos mínimos para jugador "clave" |
+| `ALPHA_MIN` | 0.80 | Mínimo ajuste α |
+| `ALPHA_MAX` | 1.20 | Máximo ajuste α |
+| `SHRINKAGE_FACTOR` | 0.35 | Regresión Bayesiana a la media |
+| `DIXON_COLES_RHO` | 0.08 | Correlación ρ para marcadores bajos |
+| `FORM_DECAY_DAYS` | 30 | Decaimiento exponencial de forma reciente |
+| `LIVE_DATA_WEIGHT` | 0.6 | Peso de datos reales vs históricos |
+| `G_NEUTRAL_STRENGTH_WEIGHT` | 0.4 | Ajuste de G_neutral por fuerza relativa |
+| `GOAL_TIME_DECAY` | 0.25 | Aumento de goles al final del partido |
+| `ENSEMBLE_WEIGHT` | 0.4 | Peso del modelo vs mercado (40/60) |
+| `AUTO_REFRESH_SECONDS` | 60 | Intervalo de auto-refresh en UI |
 | `MAX_RETRIES` | 3 | Reintentos de conexión a Understat |
 | `RETRY_DELAY` | 2 | Segundos entre reintentos |
+| `API_TIMEOUT` | 5 | Timeout de conexión a API worldcup26.ir |
 
 ## AL TRABAJAR EN MÓDULOS ESPECÍFICOS
 
@@ -143,6 +203,10 @@ main.py (orquestador → tablas formateadas en consola)
 
 ### `model_poisson.py`
 - El corazón matemático del proyecto
+- `predict_match()`: modelo pre-partido con Poisson compuesto + Dixon & Coles ρ
+- `predict_match_live()`: modelo en vivo con λ ajustado por tiempo restante, intensidad táctica, y time-decay
+- `apply_dixon_coles_adjustment()`: correlación ρ para corregir subestimación de 0-0 y 1-1
+- `calculate_strengths()`: fuerzas de ataque/defensa con shrinkage Bayesiano
 - `_sanity_check_prediction()` se llama automáticamente en cada predicción
 - λ se clampan a [MIN_LAMBDA, MAX_LAMBDA] con warning
 - La matriz de probabilidad P(i,j) usa `scipy.stats.poisson.pmf()`
@@ -152,6 +216,23 @@ main.py (orquestador → tablas formateadas en consola)
 - NaN se rellenan con mediana del equipo (no con 0)
 - Jugadores con xGI/90 > 2.5 se clampan (sanity check)
 - α se limita a [ALPHA_MIN, ALPHA_MAX]
+
+### `worldcup_schedule.py`
+- Fixture del Mundial 2026 con datos de la API worldcup26.ir
+- `get_match_status()`: status real (live/upcoming/finished) basado en la API
+- `get_countdown()`: countdown con timezone CST (conversión UTC por estadio)
+- `get_live_matches()` / `get_upcoming_matches()`: filtrado desde API
+
+### `live_api.py`
+- Cliente HTTP con caché TTL (60s partidos, 300s equipos/estadios)
+- `STADIUM_TIMEZONES`: offset UTC por estadio para conversión horaria
+- `STADIUM_ALTITUDES`, `STADIUM_WEATHER`: datos de sede
+
+### `player_context.py`
+- `calculate_context_adjustment(team, match_info)`: factor φ calibrado
+- Altitud: hasta -0.050 (>2000m diff), viaje: hasta -0.025 (>10000km)
+- Lesiones: -0.015 (titular) / -0.005 (duda)
+- φ ∈ [0.90, 1.10]
 
 ### `main.py`
 - Orquestador: no contiene lógica de negocio
