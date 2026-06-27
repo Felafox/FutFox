@@ -1,0 +1,28 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+dist/
+build/
+*.egg
+
+# Streamlit
+.streamlit/secrets.toml
+
+# Datos locales
+data/
+*.csv
+*.log
+predictions.jsonl
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+
+# Docker
+*.env
+.env.local
