@@ -17,9 +17,7 @@ Autor: FutFox Prediction Engine
 import math
 
 # ── Mapa inverso para buscar contexto con nombres en inglés ──────────────
-# Permite que calculate_context_adjustment() acepte nombres de la API
-from constants import TEAM_NAME_MAP
-_REVERSE_CONTEXT_MAP = {v: k for k, v in TEAM_NAME_MAP.items()}
+from constants import TEAM_NAME_MAP, REVERSE_TEAM_NAME_MAP
 
 
 def _get_context(team: str) -> dict:
@@ -27,13 +25,11 @@ def _get_context(team: str) -> dict:
     ctx = TEAM_CONTEXT.get(team, {})
     if ctx:
         return ctx
-    # Intentar con nombre en inglés (si viene en español del API)
-    english_name = _REVERSE_CONTEXT_MAP.get(team, "")
+    english_name = REVERSE_TEAM_NAME_MAP.get(team, "")
     if english_name:
         ctx = TEAM_CONTEXT.get(english_name, {})
         if ctx:
             return ctx
-    # Intentar con nombre en español (si viene en inglés del API)
     spanish_name = TEAM_NAME_MAP.get(team, "")
     if spanish_name:
         return TEAM_CONTEXT.get(spanish_name, {})
@@ -241,7 +237,7 @@ PLAYER_ORIGINS = {
 }
 
 
-def calculate_altitude_penalty(team: str, stadium_altitude_m: float) -> float:
+def _calculate_altitude_penalty(team: str, stadium_altitude_m: float) -> float:
     """
     Calcula la penalización por diferencia de altitud.
 
@@ -295,7 +291,7 @@ def calculate_context_adjustment(team: str, match_info: dict) -> float:
 
     # 1. Altitud
     altitude = match_info.get("altitude_m", 0)
-    phi += calculate_altitude_penalty(team, altitude)
+    phi += _calculate_altitude_penalty(team, altitude)
 
     # 2. Moral (±1.5% por 0.1 de desviación, más conservador)
     morale = ctx.get("morale", 1.0)

@@ -21,7 +21,7 @@ Autor: FutFox Prediction Engine
 
 import sys
 import traceback
-from typing import Dict, Tuple
+from typing import Tuple
 
 import pandas as pd
 
@@ -41,10 +41,56 @@ from constants import (
 from data_collection import run_collection
 from model_poisson import (
     predict_match,
-    prediction_to_dataframe,
-    print_detailed_analysis,
     MatchPrediction,
 )
+
+
+# ---------------------------------------------------------------------------
+# Utilidades de formato (movidas desde model_poisson.py)
+# ---------------------------------------------------------------------------
+
+def prediction_to_dataframe(pred: MatchPrediction):
+    """Convierte MatchPrediction en DataFrames para impresión en consola."""
+    summary_data = {
+        "Métrica": [
+            "Probabilidad Local", "Probabilidad Empate", "Probabilidad Visitante",
+            "Over 2.5 Goles", "Ambos Marcan (BTTS)", "Goles Esperados Totales",
+            "Marcador Más Probable", "  └ Probabilidad",
+        ],
+        "Valor": [
+            f"{pred.prob_home * 100:.1f}%", f"{pred.prob_draw * 100:.1f}%",
+            f"{pred.prob_away * 100:.1f}%", f"{pred.prob_over_25 * 100:.1f}%",
+            f"{pred.prob_btts * 100:.1f}%", f"{pred.expected_goals:.2f}",
+            pred.most_likely_score, f"{pred.most_likely_score_prob * 100:.1f}%",
+        ],
+    }
+    scores_data = {
+        "#": list(range(1, len(pred.top_scores) + 1)),
+        "Marcador": [s[0] for s in pred.top_scores],
+        "Probabilidad": [f"{s[1] * 100:.1f}%" for s in pred.top_scores],
+    }
+    return pd.DataFrame(summary_data), pd.DataFrame(scores_data)
+
+
+def print_detailed_analysis(pred: MatchPrediction) -> None:
+    """Análisis detallado del modelo (debug/CLI)."""
+    print(f"\n{'─'*60}")
+    print(f"  ANÁLISIS DETALLADO DEL MODELO POISSON")
+    print(f"{'─'*60}")
+    print(f"  Partido: {pred.home_team} vs {pred.away_team}")
+    print(f"\n  Parámetros de Fuerza:")
+    print(f"    Ataque {pred.home_team:>12}: {pred.attack_strength_home:.4f}")
+    print(f"    Defensa {pred.home_team:>12}: {pred.defense_strength_home:.4f}")
+    print(f"    Ataque {pred.away_team:>12}: {pred.attack_strength_away:.4f}")
+    print(f"    Defensa {pred.away_team:>12}: {pred.defense_strength_away:.4f}")
+    print(f"\n  Tasas Esperadas de Goles (λ):")
+    print(f"    λ Local ({pred.home_team}):     {pred.lambda_home:.4f}")
+    print(f"    λ Visitante ({pred.away_team}): {pred.lambda_away:.4f}")
+    print(f"\n  Probabilidades:")
+    print(f"    Victoria Local:     {pred.prob_home*100:.1f}%")
+    print(f"    Empate:             {pred.prob_draw*100:.1f}%")
+    print(f"    Victoria Visitante: {pred.prob_away*100:.1f}%")
+    print(f"{'─'*60}")
 from player_impact import analyze_player_impact
 
 
@@ -67,12 +113,6 @@ def print_header(home_team: str, away_team: str, league: str, season: int) -> No
 def print_match_prediction(pred: MatchPrediction) -> None:
     """
     Imprime la Tabla 1: Predicción del Partido.
-
-    Incluye:
-      - Probabilidades de Local, Empate, Visitante
-      - Métricas derivadas (Over 2.5, BTTS, Goles Esperados)
-      - Marcador más probable
-      - Top 5 marcadores con sus probabilidades
     """
     summary_df, scores_df = prediction_to_dataframe(pred)
 
@@ -81,12 +121,10 @@ def print_match_prediction(pred: MatchPrediction) -> None:
     print(f"  {pred.home_team} vs {pred.away_team}")
     print(f"{SEPARATOR}")
 
-    # ---- Panel de probabilidades principales ----
     print(f"\n  ┌─────────────────────────────────────────────────┐")
     print(f"  │  PROBABILIDADES DE RESULTADO                    │")
     print(f"  ├─────────────────────────────────────────────────┤")
 
-    # Barra de probabilidad visual con caracteres ASCII
     home_bar = "█" * int(pred.prob_home * BAR_LENGTH)
     draw_bar = "█" * int(pred.prob_draw * BAR_LENGTH)
     away_bar = "█" * int(pred.prob_away * BAR_LENGTH)
@@ -100,44 +138,18 @@ def print_match_prediction(pred: MatchPrediction) -> None:
     print(f"  │  Goles Esperados:    {pred.expected_goals:5.2f}")
     print(f"  └─────────────────────────────────────────────────┘")
 
-    # ---- Marcador más probable destacado ----
     print(f"\n  ⭐  MARCADOR MÁS PROBABLE: "
           f"{pred.most_likely_score} "
           f"({pred.most_likely_score_prob*100:.1f}%)")
 
-    # ---- Top 5 marcadores en formato tabla ----
     print(f"\n  Top 5 Marcadores Más Probables:")
     print()
-
-    # Formatear como tabla con tabulate si está disponible
-    try:
-        from tabulate import tabulate
-        table_str = tabulate(
-            scores_df,
-            headers="keys",
-            tablefmt="fancy_grid",
-            showindex=False,
-            numalign="center",
-            stralign="center",
-        )
-        # Indentar la tabla
-        for line in table_str.split("\n"):
-            print(f"  {line}")
-    except ImportError:
-        print(scores_df.to_string(index=False))
-        print("  (Instala 'tabulate' para mejor formato: pip install tabulate)")
-
+    _print_table(scores_df)
     print()
 
 
 def print_key_players(key_table: pd.DataFrame) -> None:
-    """
-    Imprime la Tabla 2: Jugadores Clave a Seguir.
-
-    Muestra el Top 6 (3 de cada equipo) de jugadores más influyentes
-    del partido, ordenados por xGI/90 (Expected Goal Involvements por
-    90 minutos).
-    """
+    """Imprime la Tabla 2: Jugadores Clave a Seguir."""
     print(f"\n{SEPARATOR}")
     print(f"  ⭐  TABLA 2: JUGADORES CLAVE A SEGUIR")
     print(f"  (Basado en Expected Goal Involvements por 90 min)")
@@ -147,28 +159,26 @@ def print_key_players(key_table: pd.DataFrame) -> None:
         print("  ⚠ No hay datos de jugadores disponibles para este partido.\n")
         return
 
-    try:
-        from tabulate import tabulate
-        table_str = tabulate(
-            key_table,
-            headers="keys",
-            tablefmt="fancy_grid",
-            showindex=False,
-            numalign="center",
-            stralign="left",
-        )
-        for line in table_str.split("\n"):
-            print(f"  {line}")
-    except ImportError:
-        print(key_table.to_string(index=False))
+    _print_table(key_table)
 
-    # ---- Explicación de métricas ----
     print(f"\n  {'─'*66}")
     print(f"  xG/90  = Goles Esperados por 90 minutos")
     print(f"  xA/90  = Asistencias Esperadas por 90 minutos")
     print(f"  xGI/90 = Expected Goal Involvements por 90 min (xG + xA)")
     print(f"  {'─'*66}")
     print()
+
+
+def _print_table(df: pd.DataFrame) -> None:
+    """Imprime un DataFrame como tabla formateada (tabulate o fallback)."""
+    try:
+        from tabulate import tabulate
+        table_str = tabulate(df, headers="keys", tablefmt="fancy_grid",
+                             showindex=False, numalign="center", stralign="center")
+        for line in table_str.split("\n"):
+            print(f"  {line}")
+    except ImportError:
+        print(df.to_string(index=False))
 
 
 def print_model_parameters(
@@ -373,8 +383,4 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    # Importaciones adicionales para print_model_parameters
-    import model_poisson
-    import player_impact
-
     main()

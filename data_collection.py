@@ -33,6 +33,7 @@ from constants import (
     LIVE_DATA_WEIGHT,
     MAX_RETRIES,
     RETRY_DELAY,
+    REVERSE_TEAM_NAME_MAP,
     SHRINKAGE_FACTOR,
     TEAM_NAME_MAP,
 )
@@ -329,7 +330,7 @@ def _compute_live_standings(
         league_stats actualizado con gf_per_game y ga_per_game combinados.
     """
     try:
-        from worldcup_schedule import _map_api_game
+        from live_api import map_game_to_match
         import live_api
         api_games = live_api.fetch_games()
     except Exception:
@@ -345,7 +346,7 @@ def _compute_live_standings(
     
     for g in api_games:
         try:
-            mapped = _map_api_game(g)
+            mapped = map_game_to_match(g)
         except Exception:
             continue
         if mapped.get("status") != "finished":
@@ -417,41 +418,6 @@ def _compute_live_standings(
     
     return league_stats
 
-async def _fetch_understat_league(league: str, season: int) -> dict:
-    """
-    Intenta obtener datos de liga desde Understat.
-    Retorna un dict con keys: 'teams', 'matches'.
-    """
-    try:
-        from understat import Understat
-        async with Understat() as understat:
-            league_data = await understat.league(
-                league_name=league,
-                season=str(season)
-            )
-        return league_data
-    except Exception as e:
-        print(f"  [WARN] Error al conectar con Understat (liga): {e}")
-        return {}
-
-
-async def _fetch_understat_team_players(team_name: str, season: int) -> list:
-    """
-    Intenta obtener datos de jugadores de un equipo desde Understat.
-    Retorna una lista de dicts con stats de jugadores.
-    """
-    try:
-        from understat import Understat
-        async with Understat() as understat:
-            players = await understat.team_players(
-                team_name=team_name,
-                season=str(season)
-            )
-        return players
-    except Exception as e:
-        print(f"  [WARN] Error al conectar con Understat (jugadores de {team_name}): {e}")
-        return []
-
 
 async def collect_data(
     league: str = DEFAULT_LEAGUE,
@@ -512,9 +478,6 @@ async def collect_data(
     )
 
     # Construir DataFrames de jugadores desde el fallback
-    # Mapa inverso: español → inglés (para buscar equipos que vienen de la API)
-    _REVERSE_NAME_MAP = {v: k for k, v in TEAM_NAME_MAP.items()}
-    
     def _get_players(team_name: str) -> pd.DataFrame:
         """Obtiene jugadores del fallback o crea un genérico.
         Soporta nombres en inglés (API) y español (fallback)."""
@@ -524,7 +487,7 @@ async def collect_data(
             return pd.DataFrame(records)
         
         # 2. Intentar con el nombre en inglés (API → español)
-        english_name = _REVERSE_NAME_MAP.get(team_name, team_name)
+        english_name = REVERSE_TEAM_NAME_MAP.get(team_name, team_name)
         if english_name in player_fallback:
             records = [{**p, "team": team_name} for p in player_fallback[english_name]]
             return pd.DataFrame(records)
@@ -559,7 +522,7 @@ async def collect_data(
         team_found = team_name in league_stats["team"].values
         if not team_found:
             # Intentar con nombre en inglés (API)
-            english_name = _REVERSE_NAME_MAP.get(team_name, "")
+            english_name = REVERSE_TEAM_NAME_MAP.get(team_name, "")
             if english_name and english_name in league_stats["team"].values:
                 team_found = True
             # Intentar con nombre en español

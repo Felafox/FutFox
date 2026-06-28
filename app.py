@@ -37,11 +37,12 @@ st.markdown(
 
 # ── Imports del motor FutFox ────────────────────────────────────────────
 import live_api
-from constants import HOME_ADVANTAGE, WORLD_CUP_HOME_ADVANTAGE, BETA, ENSEMBLE_WEIGHT, THE_ODDS_API_KEY
+from live_api import parse_scorers
+from constants import BETA, ENSEMBLE_WEIGHT, THE_ODDS_API_KEY, WORLD_CUP_HOME_ADVANTAGE
 from data_collection import run_collection
 from model_poisson import predict_match, predict_match_live
 from player_impact import analyze_player_impact
-from worldcup_schedule import get_live_matches, get_upcoming_matches, get_match_status, get_countdown, _parse_goal_events
+from worldcup_schedule import get_live_matches, get_upcoming_matches, get_match_status, get_countdown
 from player_context import calculate_context_adjustment, get_context_notes
 from odds_fetcher import get_market_odds, ensemble_probability
 from match_history import get_team_form
@@ -189,7 +190,6 @@ def predict_single_match(match: dict) -> dict:
         if is_live and current_minute > 0:
             # ── Predicción en vivo: λ ajustado por tiempo restante ──
             from model_poisson import calculate_strengths, calculate_lambda
-            from constants import HOME_ADVANTAGE
             g_neutral = league_avgs["avg_goals_per_game"] / 2.0
             att_h, def_h = calculate_strengths(match["home"], league_stats)
             att_a, def_a = calculate_strengths(match["away"], league_stats)
@@ -204,7 +204,7 @@ def predict_single_match(match: dict) -> dict:
                 # Parsear eventos de gol desde la API
                 home_scorers = match.get("_raw_home_scorers", "null")
                 away_scorers = match.get("_raw_away_scorers", "null")
-                goal_events = _parse_goal_events(home_scorers, away_scorers)
+                goal_events = parse_scorers(home_scorers, away_scorers)
 
                 raw_signal = LiveMatchSignal(
                     minute=current_minute,

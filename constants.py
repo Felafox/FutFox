@@ -137,6 +137,23 @@ TOURNAMENT_PHASE_GOAL_FACTOR = {
 LIVE_DATA_WEIGHT = 0.6  # 60% datos reales del torneo, 40% histórico
 
 # ---------------------------------------------------------------------------
+# Parámetros del Factor de Dominio Posicional (v3.0)
+# ---------------------------------------------------------------------------
+
+# Sensibilidad base del ajuste de λ por dominio (τ en λ_adj = λ × exp(δ×τ))
+TAU_BASE = 0.50
+
+# Asimetría dominado/dominador: τ_sub / τ_dom
+TAU_RATIO = 1.30
+
+# Fuerza de la prior Bayesiana inicial (δ ≈ 0)
+# Alta = más conservador (equipos conocidos), Baja = datos mandan (equipos desconocidos)
+PRIOR_STRENGTH_DEFAULT = 2.0
+
+# Intervalo mínimo entre actualizaciones de dominio (segundos)
+DOMINANCE_UPDATE_INTERVAL = 30
+
+# ---------------------------------------------------------------------------
 # Reintentos de conexión a Understat
 # ---------------------------------------------------------------------------
 MAX_RETRIES = 3
@@ -232,6 +249,9 @@ TEAM_NAME_MAP = {
     "Ireland": "Irlanda", "Finland": "Finlandia",
     "Venezuela": "Venezuela", "Bolivia": "Bolivia",
 }
+
+# Mapa inverso: español → inglés (para lookup bidireccional)
+REVERSE_TEAM_NAME_MAP = {v: k for k, v in TEAM_NAME_MAP.items()}
 
 # ---------------------------------------------------------------------------
 # Auto-refresh de la UI (Streamlit)

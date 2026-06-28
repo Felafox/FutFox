@@ -7,13 +7,9 @@ altitud del estadio, y estado (live/upcoming/finished).
 Autor: FutFox Prediction Engine
 """
 
-import time
-import copy
 from datetime import datetime, timezone, timedelta
 from constants import TEAM_NAME_MAP
-
-# Guardar el momento en que se inicia el servidor de simulación
-_START_TIME = time.time()
+from live_api import fetch_games, map_game_to_match
 
 # ── Zona horaria de México (CST, UTC-6) ──────────────────────────
 CST = timezone(timedelta(hours=-6))
@@ -302,115 +298,6 @@ FIXTURE = [
 ]
 
 
-def _get_live_matches_fallback() -> list:
-    """Retorna los partidos en vivo del FIXTURE hardcodeado (último recurso)."""
-    return [copy.deepcopy(m) for m in FIXTURE if m["status"] == "live"]
-
-
-def _map_api_game(g: dict) -> dict:
-    """Mapea un partido de la API worldcup26.ir a la estructura interna de FutFox.
-    Normaliza nombres de equipos usando TEAM_NAME_MAP (inglés → español)."""
-    import live_api
-    stadium_id = str(g.get("stadium_id", ""))
-    stadium_info = live_api.get_stadium_info(stadium_id)
-
-    # ── Nombres de equipos normalizados ────────────────────────────
-    home_en = g.get("home_team_name_en", "")
-    away_en = g.get("away_team_name_en", "")
-    home_label = g.get("home_team_label", "")
-    away_label = g.get("away_team_label", "")
-    
-    # Si es un placeholder (ej: "Winner Match 86"), usar el label
-    if not home_en and home_label:
-        home_en = home_label
-    if not away_en and away_label:
-        away_en = away_label
-    
-    home_name = TEAM_NAME_MAP.get(home_en, home_en)
-    away_name = TEAM_NAME_MAP.get(away_en, away_en)
-
-    # Parse scores
-    try:
-        score_home = int(g.get("home_score")) if g.get("home_score") is not None else None
-    except (ValueError, TypeError):
-        score_home = None
-        
-    try:
-        score_away = int(g.get("away_score")) if g.get("away_score") is not None else None
-    except (ValueError, TypeError):
-        score_away = None
-
-    # Parse status & minute
-    time_elapsed = str(g.get("time_elapsed", "notstarted")).strip().lower()
-    finished_val = str(g.get("finished", "FALSE")).upper().strip()
-    
-    if time_elapsed == "finished" or finished_val == "TRUE":
-        status = "finished"
-        minute = 90
-    elif time_elapsed == "notstarted" or time_elapsed == "none" or time_elapsed == "":
-        status = "upcoming"
-        minute = 0
-    elif time_elapsed.isdigit():
-        # Minuto numérico simple (ej: "66")
-        status = "live"
-        minute = int(time_elapsed)
-    else:
-        # Formato con comilla: "45+2'", "90+4'"
-        status = "live"
-        min_clean = time_elapsed.replace("'", "").strip()
-        if "+" in min_clean:
-            try:
-                minute = sum(int(p) for p in min_clean.split("+"))
-            except ValueError:
-                minute = 45
-        else:
-            try:
-                minute = int(min_clean)
-            except ValueError:
-                minute = 45
-
-    # Horario local (extraer hora)
-    local_date_str = g.get("local_date", "")
-    cst_time = "N/A"
-    if local_date_str and " " in local_date_str:
-        try:
-            cst_time = local_date_str.split(" ")[1][:5]  # e.g. "21:00"
-        except Exception:
-            pass
-
-    # Convertir formato de fecha API "MM/DD/YYYY HH:MM" a "YYYY-MM-DD HH:MM"
-    datetime_normalized = local_date_str
-    if "/" in local_date_str:
-        try:
-            dt = datetime.strptime(local_date_str, "%m/%d/%Y %H:%M")
-            datetime_normalized = dt.strftime("%Y-%m-%d %H:%M")
-        except (ValueError, TypeError):
-            pass
-
-    # UTC offset del estadio (para convertir hora local → UTC → CST)
-    utc_offset = stadium_info.get("utc_offset", -6)
-
-    return {
-        "id": int(g.get("id", 0)),
-        "group": g.get("group", ""),
-        "home": home_name,
-        "away": away_name,
-        "datetime": datetime_normalized,
-        "cst": cst_time,
-        "stadium": stadium_info.get("name", "Estadio"),
-        "city": stadium_info.get("city", "Sede"),
-        "country": stadium_info.get("country", ""),
-        "altitude_m": stadium_info.get("altitude_m", 0),
-        "temperature_c": stadium_info.get("temperature_c", 22),
-        "humidity_pct": stadium_info.get("humidity_pct", 50),
-        "status": status,
-        "minute": minute,
-        "score_home": score_home,
-        "score_away": score_away,
-        "utc_offset": utc_offset,
-    }
-
-
 def _sort_by_datetime(matches: list) -> list:
     """Ordena partidos por fecha/hora más cercana primero."""
     def sort_key(m):
@@ -426,35 +313,29 @@ def _sort_by_datetime(matches: list) -> list:
 
 def get_live_matches() -> list:
     """Retorna los partidos que están en vivo ahora (API → fallback)."""
-    import live_api
-    api_games = live_api.fetch_games()
+    api_games = fetch_games()
     
     if api_games is not None:
         live_games = []
         for g in api_games:
-            mapped = _map_api_game(g)
+            mapped = map_game_to_match(g)
             if mapped["status"] == "live":
                 live_games.append(mapped)
-        # Si la API funciona, confiamos en sus datos (no mezclar con FIXTURE)
         return _sort_by_datetime(live_games)
     
-    # Fallback: fixture hardcodeado (solo si la API no responde)
-    fallback = [copy.deepcopy(m) for m in FIXTURE if m["status"] == "live"]
-    return _sort_by_datetime(fallback)
+    return _sort_by_datetime([m for m in FIXTURE if m["status"] == "live"])
 
 
 def get_upcoming_matches() -> list:
     """Retorna los próximos partidos (no empezados), ordenados por fecha."""
-    import live_api
-    api_games = live_api.fetch_games()
+    api_games = fetch_games()
     
     if api_games is not None:
         upcoming_games = []
         for g in api_games:
-            mapped = _map_api_game(g)
+            mapped = map_game_to_match(g)
             if mapped["status"] == "upcoming":
                 upcoming_games.append(mapped)
-        # Filtrar placeholders (sin equipos reales)
         upcoming_games = [
             m for m in upcoming_games
             if m["home"] and m["away"]
@@ -464,16 +345,14 @@ def get_upcoming_matches() -> list:
         ]
         return _sort_by_datetime(upcoming_games)
     
-    # Fallback: fixture hardcodeado
     return _sort_by_datetime([m for m in FIXTURE if m["status"] == "upcoming"])
 
 
 def get_all_matches() -> list:
     """Retorna todos los partidos del fixture (API → fallback)."""
-    import live_api
-    api_games = live_api.fetch_games()
+    api_games = fetch_games()
     
     if api_games is not None:
-        return _sort_by_datetime([_map_api_game(g) for g in api_games])
+        return _sort_by_datetime([map_game_to_match(g) for g in api_games])
     
     return FIXTURE

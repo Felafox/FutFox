@@ -13,7 +13,7 @@ Autor: FutFox Prediction Engine
 """
 
 import time
-from typing import Dict, Optional, Tuple
+from typing import Dict, Optional
 
 import numpy as np
 import requests

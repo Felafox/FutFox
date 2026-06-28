@@ -228,7 +228,7 @@ def _tool_get_market_odds(args: dict) -> dict:
     away = args.get("away_team", "")
 
     try:
-        from odds_mexico import get_mexico_odds, odds_to_probabilities
+        from odds_mexico import get_mexico_odds
         odds = get_mexico_odds(home, away)
         if odds:
             return {"content": [{"type": "text", "text": json.dumps({

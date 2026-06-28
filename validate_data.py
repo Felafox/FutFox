@@ -17,7 +17,7 @@ from constants import (
     SEPARATOR, SEPARATOR_THIN, WORLD_CUP_HOME_ADVANTAGE,
 )
 from data_collection import run_collection, FALLBACK_TEAM_STATS
-from model_poisson import MatchPrediction, calculate_lambda, calculate_strengths, predict_match
+from model_poisson import MatchPrediction, calculate_strengths, predict_match
 from player_impact import analyze_player_impact
 
 CHECK_OK, CHECK_WARN, CHECK_ERR, CHECK_INFO = "✅", "🟡", "🔴", "ℹ️"
